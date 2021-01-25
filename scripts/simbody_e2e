@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+set -xeuo pipefail
+
+cd ~/Desktop/osc/feature-simbody_perf_counters-deps-RelWithDebInfo-build/
+cmake --build . --target simbody -j $(nproc)
+cd -
+
+cd ~/Desktop/osc/feature-simbody_perf_counters-RelWithDebInfo-build/
+cmake --build . --target install -j $(nproc)
+cd -
+
+cd ../osmv-externalproj-Release/ && cmake --build . --target osmv
+./osmv
+cd -
