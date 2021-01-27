@@ -398,9 +398,40 @@ namespace {
 
         osmv::Integrator_stats istats;
 
+        struct {
+            // plots, ordered by state variable index
+            std::vector<Evenly_spaced_sparkline<256>> plots;
+
+            // pointers to associated components, if found, ordered by state variable index
+            //
+            // - components.size() == plots.size()
+            //
+            // - elements can be `nullptr`s, which means that the implementation couldn't figure
+            //   out which component owns the state variable
+            std::vector<OpenSim::Component const*> components;
+
+            // a sequence of state variable indices, ordered by highest current yErr
+            //
+            // - plot_indices.size() == plots.size()
+            // - max(plot_indices) < plots.size()
+            // - min(plot_indices) == 0
+            std::vector<int> plot_indices;
+
+            // scratch space for OpenSim::Component::getStateVariableYIndices
+            std::vector<SimTK::ZIndex> zindices_scratch;
+
+            void clear() {
+                plots.clear();
+                components.clear();
+                plot_indices.clear();
+                zindices_scratch.clear();
+            }
+        } yErr;
+
         void clear() {
             prescribeQcalls.clear();
             simTimeDividedByWallTime.clear();
+            yErr.clear();
 
             for (Integrator_stat_sparkline& integrator_plot : integrator_plots) {
                 integrator_plot.clear();
@@ -437,6 +468,45 @@ namespace {
             // push 0d integrator stats onto sparklines
             for (Integrator_stat_sparkline& integrator_plot : integrator_plots) {
                 integrator_plot.push_datapoint(sim_time, istats);
+            }
+
+            // push yEstErr onto sparklines
+            yErr.plots.resize(istats.yErrorEstimates.size());
+            for (size_t i = 0; i < istats.yErrorEstimates.size(); ++i) {
+                yErr.plots[i].push_datapoint(sim_time, static_cast<float>(istats.yErrorEstimates[i]));
+            }
+
+            // sort plot indices by the current max error
+            {
+                yErr.plot_indices.resize(istats.yErrorEstimates.size());
+                for (size_t i = 0; i < yErr.plot_indices.size(); ++i) {
+                    yErr.plot_indices[i] = static_cast<int>(i);
+                }
+                std::sort(yErr.plot_indices.begin(), yErr.plot_indices.end(), [&](int a, int b) {
+                    return yErr.plots[static_cast<size_t>(a)].max > yErr.plots[static_cast<size_t>(b)].max;
+                });
+            }
+
+            // figure out which `OpenSim::Component`s own which state variables by asking each
+            // `Component` to list each y-index it owns
+            if (false) {
+                yErr.components.clear();
+                yErr.components.resize(yErr.plots.size(), nullptr);
+
+                int nQ = st.getNQ();
+                int nU = st.getNU();
+                int zBase = nQ + nU;
+
+                for (OpenSim::Component const& c : model.getComponentList<OpenSim::Component>()) {
+                    // c.getStateVariableZIndices(yErr.zindices_scratch);
+
+                    for (SimTK::ZIndex zi : yErr.zindices_scratch) {
+                        int z = zBase + zi;
+                        if (z < yErr.components.size()) {
+                            yErr.components[static_cast<size_t>(z)] = &c;
+                        }
+                    }
+                }
             }
         }
 
@@ -556,6 +626,45 @@ namespace {
                 }
 
                 ImGui::Columns();
+
+                ImGui::Dummy({0.0f, 20.0f});
+                ImGui::Text("yErrEst:");
+                ImGui::Dummy({0.0f, 2.5f});
+                ImGui::Separator();
+
+                for (int y_index : yErr.plot_indices) {
+                    ImGui::Columns(2);
+
+                    size_t idx = static_cast<size_t>(y_index);
+                    auto const& plot = yErr.plots[idx];
+                    OpenSim::Component const* maybe_ptr = yErr.components[idx];
+
+                    if (maybe_ptr != nullptr) {
+                        ImGui::Text("component = %s", maybe_ptr->getName().c_str());
+                        if (ImGui::IsItemHovered()) {
+                            renderer.hovered_component = maybe_ptr;
+                        }
+                        if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                            selected_component = maybe_ptr;
+                        }
+                    } else {
+                        ImGui::Text("index = %i", y_index);
+                    }
+
+                    ImGui::Dummy({0.0f, 2.0f});
+                    ImGui::Text("min = %.3e", static_cast<double>(plot.min));
+                    ImGui::Text("max = %.3e", static_cast<double>(plot.max));
+                    ImGui::Text("cur = %.3e", static_cast<double>(plot.last_datapoint()));
+                    ImGui::Dummy({0.0f, 5.0f});
+                    ImGui::NextColumn();
+
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvailWidth());
+                    plot.draw(50.0f);
+                    ImGui::NextColumn();
+
+                    ImGui::Columns();
+                    ImGui::Separator();
+                }
             }
         }
     };

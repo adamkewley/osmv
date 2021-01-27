@@ -1,5 +1,4 @@
 ﻿#include "renderer.hpp"
-
 #include "3d_common.hpp"
 #include "application.hpp"
 #include "cfg.hpp"
