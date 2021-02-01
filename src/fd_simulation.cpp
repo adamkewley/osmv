@@ -248,6 +248,16 @@ namespace {
                 is.numConvergentIterations = integrator.getNumConvergentIterations();
                 is.numDivergentIterations = integrator.getNumDivergentIterations();
                 is.numIterations = integrator.getNumIterations();
+
+                  // copy-assign the y error estimates
+                  {
+                      SimTK::Vector const& yErrEst = integrator.getPreviousStepYErrorEstimates();
+                      is.yErrorEstimates.clear();
+                      is.yErrorEstimates.reserve(static_cast<size_t>(yErrEst.size()));
+                      for (int i = 0; i < yErrEst.size(); ++i) {
+                          is.yErrorEstimates.push_back(yErrEst[i]);
+                      }
+                  }
             }
 
             if (steps++ > 0) {

@@ -67,6 +67,8 @@ namespace osmv {
         int numConvergentIterations = 0;
         int numDivergentIterations = 0;
         int numIterations = 0;
+
+        std::vector<double> yErrorEstimates;
     };
 
     // a simulator that runs a forward-dynamic simulation on a background thread

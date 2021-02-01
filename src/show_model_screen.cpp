@@ -2,6 +2,7 @@
 
 #include "osmv_config.hpp"
 
+#include "sdl_wrapper.hpp"
 #include "3d_common.hpp"
 #include "application.hpp"
 #include "cfg.hpp"
@@ -420,13 +421,13 @@ namespace {
             std::vector<int> plot_indices;
 
             // scratch space for OpenSim::Component::getStateVariableYIndices
-            std::vector<SimTK::ZIndex> zindices_scratch;
+            std::vector<SimTK::SystemYIndex> yindices_scratch;
 
             void clear() {
                 plots.clear();
                 components.clear();
                 plot_indices.clear();
-                zindices_scratch.clear();
+                yindices_scratch.clear();
             }
         } yErr;
 
@@ -452,7 +453,7 @@ namespace {
             clear();
         }
 
-        void on_ui_state_update(OpenSim::Model const&, SimTK::State const& st) {
+        void on_ui_state_update(OpenSim::Model const& model, SimTK::State const& st) {
             if (not simulator) {
                 return;
             }
@@ -491,21 +492,17 @@ namespace {
 
             // figure out which `OpenSim::Component`s own which state variables by asking each
             // `Component` to list each y-index it owns
-            if (false) {
+            {
                 yErr.components.clear();
                 yErr.components.resize(yErr.plots.size(), nullptr);
 
-                int nQ = st.getNQ();
-                int nU = st.getNU();
-                int zBase = nQ + nU;
-
                 for (OpenSim::Component const& c : model.getComponentList<OpenSim::Component>()) {
-                    // c.getStateVariableZIndices(yErr.zindices_scratch);
+                    yErr.yindices_scratch.clear();
+                    c.getStateVariableYIndices(st, yErr.yindices_scratch);
 
-                    for (SimTK::ZIndex zi : yErr.zindices_scratch) {
-                        int z = zBase + zi;
-                        if (z < yErr.components.size()) {
-                            yErr.components[static_cast<size_t>(z)] = &c;
+                    for (SimTK::SystemYIndex idx : yErr.yindices_scratch) {
+                        if (idx < yErr.components.size()) {
+                            yErr.components[static_cast<size_t>(idx)] =  &c;
                         }
                     }
                 }
@@ -513,7 +510,8 @@ namespace {
         }
 
         void draw(
-            osmv::Simple_model_renderer&, Selected_component&, OpenSim::Model& shown_model, SimTK::State& shown_state) {
+            osmv::Simple_model_renderer& renderer, Selected_component& selected_component, OpenSim::Model& shown_model, SimTK::State& shown_state) {
+
             // start/stop button
             if (simulator and simulator->is_running()) {
                 ImGui::PushStyleColor(ImGuiCol_Button, red);
@@ -552,9 +550,9 @@ namespace {
                     integrator_method = static_cast<osmv::IntegratorMethod>(method);
                 }
             }
-            ImGui::Columns();
+            ImGui::NextColumn();
 
-            // ImGui::SliderFloat("final time", &fd_final_time, 0.01f, 20.0f);
+            ImGui::Columns();
 
             if (simulator) {
                 std::chrono::milliseconds wall_ms =
@@ -642,22 +640,26 @@ namespace {
                 ImGui::Separator();
 
                 for (int y_index : yErr.plot_indices) {
+                    // != nullptr if a component could be associated with the state var
+                    OpenSim::Component const* component = nullptr;
+                    if (y_index >= 0 and y_index  < yErr.components.size()) {
+                        component = yErr.components[y_index];
+                    }
+
                     ImGui::Columns(2);
 
                     size_t idx = static_cast<size_t>(y_index);
-                    auto const& plot = yErr.plots[idx];
-                    OpenSim::Component const* maybe_ptr = yErr.components[idx];
+                    Evenly_spaced_sparkline<256> const& plot = yErr.plots[idx];
 
-                    if (maybe_ptr != nullptr) {
-                        ImGui::Text("component = %s", maybe_ptr->getName().c_str());
+                    ImGui::Text("index = %i", y_index);
+                    if (component) {
+                        ImGui::Text("component = %s", component->getName().c_str());
                         if (ImGui::IsItemHovered()) {
-                            renderer.hovered_component = maybe_ptr;
+                            renderer.hovered_component = component;
                         }
                         if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-                            selected_component = maybe_ptr;
+                            selected_component = component;
                         }
-                    } else {
-                        ImGui::Text("index = %i", y_index);
                     }
 
                     ImGui::Dummy({0.0f, 2.0f});
@@ -667,8 +669,9 @@ namespace {
                     ImGui::Dummy({0.0f, 5.0f});
                     ImGui::NextColumn();
 
-                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvailWidth());
-                    plot.draw(50.0f);
+                    ImVec2 avail = ImGui::GetContentRegionAvail();
+                    ImGui::SetNextItemWidth(avail.x);
+                    plot.draw(avail.y);
                     ImGui::NextColumn();
 
                     ImGui::Columns();

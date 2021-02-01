@@ -2,6 +2,7 @@
 
 #include "application.hpp"
 
+#include "SDL_events.h"
 #include <cassert>
 
 // screen: thin abstraction over an application screen

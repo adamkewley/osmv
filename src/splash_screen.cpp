@@ -73,7 +73,8 @@ namespace osmv {
 
             // center the menu
             {
-                glm::vec2 app_window_dims = app.window_dimensions();
+                auto [w, h] = app.window_dimensions();
+                glm::vec2 app_window_dims{w, h};
                 glm::vec2 rough_menu_dims = {500, 500};
                 glm::vec2 menu_pos = 0.5f * (app_window_dims - rough_menu_dims);
                 menu_pos.y = 100;

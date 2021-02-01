@@ -662,7 +662,7 @@ void osmv::Simple_model_renderer::draw(
     // - SDL screen coords are traditional screen coords. Origin top-left, Y goes down
     // - OpenGL screen coords are mathematical coords. Origin bottom-left, Y goes up
     sdl::Mouse_state m = sdl::GetMouseState();
-    sdl::Window_dimensions d = app.window_dimensions();
+    Window_dimensions d = app.window_dimensions();
     renderer.passthrough_hittest_x = m.x;
     renderer.passthrough_hittest_y = d.h - m.y;
 

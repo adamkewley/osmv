@@ -471,8 +471,9 @@ void osmv::Application::is_throttling_fps(bool throttle) {
 }
 
 // dimensions of the main application window in pixels
-sdl::Window_dimensions osmv::Application::window_dimensions() const noexcept {
-    return sdl::GetWindowSize(impl->window);
+osmv::Window_dimensions osmv::Application::window_dimensions() const noexcept {
+    auto [w, h] = sdl::GetWindowSize(impl->window);
+    return osmv::Window_dimensions{w, h};
 }
 
 // move mouse relative to the window (origin in top-left)
