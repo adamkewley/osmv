@@ -10,6 +10,7 @@
 #include <array>
 #include <cassert>
 #include <exception>
+#include <iostream>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -312,26 +313,18 @@ namespace {
         }
     };
 
-    // mesh, fully loaded onto the GPU with whichever VAOs it needs initialized also
-    struct Mesh_on_gpu final {
-        gl::Array_bufferT<osmv::Untextured_vert> vbo;
-        size_t instance_hash = 0;  // cache VBO assignments
-        gl::Array_bufferT<osmv::Raw_mesh_instance> instance_vbo{static_cast<GLenum>(GL_DYNAMIC_DRAW)};
-        gl::Vertex_array main_vao;
-        gl::Vertex_array normal_vao;
+    // how data for shaders is stored
+    struct Mesh_storage final {
+        gl::Array_bufferT<osmv::Untextured_vert> meshes;
+        gl::Array_bufferT<osmv::Raw_mesh_instance> instances{static_cast<GLenum>(GL_DYNAMIC_DRAW)};
 
-    public:
-        Mesh_on_gpu(osmv::Untextured_vert const* verts, size_t n) :
-            vbo{verts, verts + n},
-            main_vao{Gouraud_mrt_shader::create_vao(vbo, instance_vbo)},
-            normal_vao{Normals_shader::create_vao(vbo)} {
+        gl::Vertex_array main_vao{Gouraud_mrt_shader::create_vao(meshes, instances)};
+        gl::Vertex_array normal_vao{Normals_shader::create_vao(meshes)};
+    };
 
-            OSMV_ASSERT_NO_OPENGL_ERRORS_HERE();
-        }
-
-        int sizei() const noexcept {
-            return vbo.sizei();
-        }
+    struct Stored_mesh_offsets final {
+        GLintptr offset;
+        GLsizeiptr size;
     };
 
     // create an OpenGL Pixel Buffer Object (PBO) that holds exactly one pixel
@@ -353,16 +346,14 @@ namespace {
     // instance data)
     //
     // this should only be populated after OpenGL is initialized
-    std::vector<Mesh_on_gpu> global_meshes;
+    std::unique_ptr<Mesh_storage> gMeshStorage;
+    std::vector<Stored_mesh_offsets> gMeshes;
 
-    Mesh_on_gpu& global_mesh_lookup(int meshid) {
-        std::vector<Mesh_on_gpu>& meshes = global_meshes;
-
+    Stored_mesh_offsets get_mesh_offsets(int meshid) {
         assert(meshid != osmv::invalid_meshid);
         assert(meshid >= 0);
-        assert(static_cast<size_t>(meshid) < meshes.size());
-
-        return meshes[static_cast<size_t>(meshid)];
+        assert(static_cast<size_t>(meshid) < gMeshes.size());
+        return gMeshes[static_cast<size_t>(meshid)];
     }
 
     // OpenGL buffers used by the renderer
@@ -603,9 +594,20 @@ namespace osmv {
 }
 
 int osmv::globally_allocate_mesh(osmv::Untextured_vert const* verts, size_t n) {
-    assert(global_meshes.size() < std::numeric_limits<int>::max());
-    int meshid = static_cast<int>(global_meshes.size());
-    global_meshes.emplace_back(verts, n);
+    assert(gMeshes.size() < std::numeric_limits<int>::max());
+
+    // lazily initialize mesh storage (needs OpenGL to be initialized)
+    if (not gMeshStorage) {
+        gMeshStorage.reset(new Mesh_storage{});
+    }
+
+    int meshid = static_cast<int>(gMeshes.size());
+    GLintptr offset = gMeshStorage->meshes.sizei();
+    GLsizeiptr size = static_cast<GLsizeiptr>(n);
+
+    gMeshes.push_back(Stored_mesh_offsets{offset, size});
+    gMeshStorage->meshes.push_back(verts, verts + n);
+
     return meshid;
 }
 
@@ -713,6 +715,8 @@ osmv::Raw_drawcall_result osmv::Raw_renderer::draw(Raw_drawcall_params const& pa
     //     - the input color encodes the selected component index (RGB) and the rim
     //       alpha (A). It's used in downstream steps
     if (params.flags & RawRendererFlags_DrawSceneGeometry) {
+        assert(gMeshStorage != nullptr);
+
         Gouraud_mrt_shader& shader = impl->shaders.gouraud;
 
         gl::DrawBuffers(GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1);
@@ -733,6 +737,8 @@ osmv::Raw_drawcall_result osmv::Raw_renderer::draw(Raw_drawcall_params const& pa
         // instanced draw ordering
         //
         // cluster draw calls by meshid
+
+        gl::BindVertexArray(gMeshStorage->main_vao);
         size_t pos = 0;
         while (pos < nmeshes) {
             int meshid = meshes[pos]._meshid;
@@ -743,11 +749,13 @@ osmv::Raw_drawcall_result osmv::Raw_renderer::draw(Raw_drawcall_params const& pa
             }
 
             // [pos, end) contains instances with meshid
-            Mesh_on_gpu& md = global_mesh_lookup(static_cast<int>(meshid));
-            md.instance_vbo.assign(meshes + pos, meshes + end);
-            gl::BindVertexArray(md.main_vao);
-            glDrawArraysInstanced(GL_TRIANGLES, 0, md.sizei(), static_cast<GLsizei>(end - pos));
-
+            Stored_mesh_offsets offsets = get_mesh_offsets(meshid);
+            gMeshStorage->instances.assign(meshes + pos, meshes + end);
+            glDrawArraysInstanced(
+                GL_TRIANGLES,
+                static_cast<int>(offsets.offset),
+                static_cast<int>(offsets.size),
+                static_cast<GLsizei>(end - pos));
             pos = end;
         }
         gl::BindVertexArray();
@@ -756,6 +764,8 @@ osmv::Raw_drawcall_result osmv::Raw_renderer::draw(Raw_drawcall_params const& pa
 
     // (optional): draw a textured floor into COLOR0
     if (params.flags & RawRendererFlags_ShowFloor) {
+        assert(gMeshStorage != nullptr);
+
         Plain_texture_shader& pts = impl->shaders.plain_texture;
 
         gl::DrawBuffer(GL_COLOR_ATTACHMENT0);
@@ -783,11 +793,11 @@ osmv::Raw_drawcall_result osmv::Raw_renderer::draw(Raw_drawcall_params const& pa
 
         for (size_t i = 0; i < nmeshes; ++i) {
             Raw_mesh_instance const& mi = meshes[i];
-            Mesh_on_gpu& md = global_mesh_lookup(mi._meshid);
+            Stored_mesh_offsets offsets = get_mesh_offsets(mi._meshid);
             gl::Uniform(shader.uModelMat, mi.transform);
             gl::Uniform(shader.uNormalMat, mi._normal_xform);
-            gl::BindVertexArray(md.normal_vao);
-            gl::DrawArrays(GL_TRIANGLES, 0, md.sizei());
+            gl::BindVertexArray(gMeshStorage->normal_vao);
+            gl::DrawArrays(GL_TRIANGLES, offsets.offset, offsets.size);
         }
         gl::BindVertexArray();
     }
