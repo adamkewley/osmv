@@ -23,9 +23,10 @@ namespace osmv {
 
         void generate_trivial_indices() {
             size_t n = vert_data.size();
+            assert(n <= std::numeric_limits<element_index_type>::max());
             indices.resize(n);
             for (size_t i = 0; i < n; ++i) {
-                indices[i] = i;
+                indices[i] = static_cast<element_index_type>(i);
             }
         }
 
